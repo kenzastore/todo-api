@@ -19,18 +19,22 @@
             color: #2c3e50;
         }
 
-        form {
+        .container {
             background: #fff;
             padding: 20px;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
             margin-bottom: 20px;
+        }
+
+        form {
             display: flex;
             flex-direction: column;
             gap: 10px;
         }
 
         input[type="text"],
+        input[type="password"],
         textarea {
             padding: 10px;
             border: 1px solid #ddd;
@@ -58,12 +62,21 @@
             background-color: #2980b9;
         }
 
+        .secondary-btn {
+            background-color: #95a5a6;
+        }
+
+        .secondary-btn:hover {
+            background-color: #7f8c8d;
+        }
+
         #notes-list {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
             gap: 20px;
             list-style: none;
             padding: 0;
+            margin-top: 20px;
         }
 
         .note-card {
@@ -110,29 +123,177 @@
         .delete-btn:hover {
             background-color: #c0392b;
         }
+
+        .hidden {
+            display: none;
+        }
+
+        .auth-toggle {
+            text-align: center;
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+
+        .auth-toggle a {
+            color: #3498db;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+
+        #user-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 
 <body>
     <h1>Go Notes App</h1>
 
-    <form id="note-form">
-        <input type="text" id="note-title" placeholder="Note Title" required />
-        <textarea id="note-content" placeholder="Note Content..."></textarea>
-        <button type="submit">Add Note</button>
-    </form>
+    <!-- Auth Container -->
+    <div id="auth-container" class="container">
+        <h2 id="auth-title">Login</h2>
+        <form id="auth-form">
+            <input type="text" id="username" placeholder="Username" required />
+            <input type="password" id="password" placeholder="Password" required />
+            <button type="submit" id="auth-submit">Login</button>
+        </form>
+        <div class="auth-toggle">
+            <span id="auth-toggle-text">Don't have an account?</span>
+            <a id="auth-toggle-link">Register</a>
+        </div>
+    </div>
 
-    <div id="notes-list"></div>
+    <!-- App Container -->
+    <div id="app-container" class="hidden">
+        <div id="user-info">
+            <span id="welcome-msg"></span>
+            <button id="logout-btn" class="secondary-btn">Logout</button>
+        </div>
+
+        <div class="container">
+            <form id="note-form">
+                <input type="text" id="note-title" placeholder="Note Title" required />
+                <textarea id="note-content" placeholder="Note Content..."></textarea>
+                <button type="submit">Add Note</button>
+            </form>
+        </div>
+
+        <div id="notes-list"></div>
+    </div>
 
     <script>
-        const notesList = document.getElementById('notes-list');
-        const form = document.getElementById('note-form');
-        const titleInput = document.getElementById('note-title');
-        const contentInput = document.getElementById('note-content');
+        // Elements
+        const authContainer = document.getElementById('auth-container');
+        const appContainer = document.getElementById('app-container');
+        const authForm = document.getElementById('auth-form');
+        const authTitle = document.getElementById('auth-title');
+        const authSubmit = document.getElementById('auth-submit');
+        const authToggleText = document.getElementById('auth-toggle-text');
+        const authToggleLink = document.getElementById('auth-toggle-link');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const logoutBtn = document.getElementById('logout-btn');
+        const welcomeMsg = document.getElementById('welcome-msg');
 
+        const notesList = document.getElementById('notes-list');
+        const noteForm = document.getElementById('note-form');
+        const noteTitleInput = document.getElementById('note-title');
+        const noteContentInput = document.getElementById('note-content');
+
+        let isLoginMode = true;
+
+        // Auth Logic
+        authToggleLink.addEventListener('click', () => {
+            isLoginMode = !isLoginMode;
+            if (isLoginMode) {
+                authTitle.textContent = 'Login';
+                authSubmit.textContent = 'Login';
+                authToggleText.textContent = "Don't have an account?";
+                authToggleLink.textContent = 'Register';
+            } else {
+                authTitle.textContent = 'Register';
+                authSubmit.textContent = 'Register';
+                authToggleText.textContent = "Already have an account?";
+                authToggleLink.textContent = 'Login';
+            }
+        });
+
+        authForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value.trim();
+
+            const endpoint = isLoginMode ? '/login' : '/register';
+
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (res.ok) {
+                    if (isLoginMode) {
+                        showApp(username);
+                    } else {
+                        alert('Registration successful! Please login.');
+                        // Switch to login mode
+                        authToggleLink.click();
+                    }
+                } else {
+                    const text = await res.text();
+                    alert(text || 'Authentication failed');
+                }
+            } catch (err) {
+                console.error(err);
+                alert('An error occurred');
+            }
+        });
+
+        logoutBtn.addEventListener('click', async () => {
+            await fetch('/logout');
+            showAuth();
+        });
+
+        async function checkAuth() {
+            try {
+                const res = await fetch('/check-auth');
+                if (res.ok) {
+                    // We don't have the username easily available from check-auth without extra API
+                    // For now just show app
+                    showApp('User');
+                } else {
+                    showAuth();
+                }
+            } catch (err) {
+                showAuth();
+            }
+        }
+
+        function showApp(username) {
+            authContainer.classList.add('hidden');
+            appContainer.classList.remove('hidden');
+            welcomeMsg.textContent = `Welcome, ${username}!`;
+            loadNotes();
+        }
+
+        function showAuth() {
+            appContainer.classList.add('hidden');
+            authContainer.classList.remove('hidden');
+            notesList.innerHTML = '';
+        }
+
+        // Notes Logic
         async function loadNotes() {
             try {
                 const res = await fetch('/notes');
+                if (res.status === 401) {
+                    showAuth();
+                    return;
+                }
                 if (!res.ok) throw new Error('Failed to fetch notes');
                 const data = await res.json();
                 renderNotes(data || []);
@@ -191,21 +352,21 @@
             });
         }
 
-        form.addEventListener('submit', async (e) => {
+        noteForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const title = titleInput.value.trim();
-            const content = contentInput.value.trim();
+            const title = noteTitleInput.value.trim();
+            const content = noteContentInput.value.trim();
             if (!title) return;
-            
+
             await createNote(title, content);
-            
-            titleInput.value = '';
-            contentInput.value = '';
+
+            noteTitleInput.value = '';
+            noteContentInput.value = '';
             loadNotes();
         });
 
         // initial load
-        loadNotes();
+        checkAuth();
     </script>
 </body>
 

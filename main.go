@@ -1,12 +1,16 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"html/template"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
-	"sync"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 type Todo struct {
@@ -16,117 +20,60 @@ type Todo struct {
 }
 
 var (
-	todos  = []Todo{}
-	nextID = 1
-	mu     sync.Mutex // protects todos & nextID
+	db   *sql.DB
+	tmpl *template.Template
 )
 
-// GET /todos
-func getTodosHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(todos)
+func main() {
+	// DB config - for now hardcoded; later you can move to env vars
+	dsn := os.Getenv("TODO_DB_DSN")
+	if dsn == "" {
+		// user:password@tcp(host:port)/dbname
+		dsn = "cloud:cloud.kenzastore.my.id@tcp(127.0.0.1:3306)/cloud?parseTime=true&charset=utf8mb4&loc=Local"
+	}
+
+	var err error
+	db, err = sql.Open("mysql", dsn)
+	if err != nil {
+		log.Fatal("sql.Open:", err)
+	}
+	if err := db.Ping(); err != nil {
+		log.Fatal("db.Ping:", err)
+	}
+	log.Println("Connected to MariaDB")
+
+	// parse frontend template (for /)
+	tmpl = template.Must(template.ParseFiles("static/index.html"))
+
+	// API routes
+	http.HandleFunc("/todos", todosHandler)   // GET, POST
+	http.HandleFunc("/todos/", todoItemHandler) // PUT, DELETE
+
+	// Frontend
+	http.HandleFunc("/", frontHandler)
+
+	// Start server
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Println("Server running at http://localhost:" + port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
-// POST /todos
-// body: { "title": "Learn Go" }
-func createTodoHandler(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Title string `json:"title"`
-	}
+// --------- Handlers ----------
 
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+func frontHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
 		return
 	}
-	if strings.TrimSpace(body.Title) == "" {
-		http.Error(w, "title is required", http.StatusBadRequest)
-		return
+	if err := tmpl.Execute(w, nil); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+		log.Println("template error:", err)
 	}
-
-	mu.Lock()
-	todo := Todo{
-		ID:    nextID,
-		Title: body.Title,
-		Done:  false,
-	}
-	nextID++
-	todos = append(todos, todo)
-	mu.Unlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(todo)
 }
 
-// PUT /todos/{id}
-// body: { "title": "New title", "done": true }
-func updateTodoHandler(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/todos/")
-	id, err := strconv.Atoi(idStr)
-	if err != nil || id <= 0 {
-		http.Error(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-
-	var body struct {
-		Title string `json:"title"`
-		Done  bool   `json:"done"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(body.Title) == "" {
-		http.Error(w, "title is required", http.StatusBadRequest)
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	for i := range todos {
-		if todos[i].ID == id {
-			todos[i].Title = body.Title
-			todos[i].Done = body.Done
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(todos[i])
-			return
-		}
-	}
-
-	http.Error(w, "todo not found", http.StatusNotFound)
-}
-
-// DELETE /todos/{id}
-func deleteTodoHandler(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/todos/")
-	id, err := strconv.Atoi(idStr)
-	if err != nil || id <= 0 {
-		http.Error(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	index := -1
-	for i, t := range todos {
-		if t.ID == id {
-			index = i
-			break
-		}
-	}
-	if index == -1 {
-		http.Error(w, "todo not found", http.StatusNotFound)
-		return
-	}
-
-	todos = append(todos[:index], todos[index+1:]...)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// /todos for collection, /todos/{id} for single item
 func todosHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -149,15 +96,129 @@ func todoItemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func main() {
-	// JSON API
-	http.HandleFunc("/todos", todosHandler)
-	http.HandleFunc("/todos/", todoItemHandler)
+func getTodosHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query(`SELECT id, title, done FROM todos ORDER BY id`)
+	if err != nil {
+		log.Println("getTodos query:", err)
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
 
-	// Frontend (we'll add static/ next)
-	fs := http.FileServer(http.Dir("./static"))
-	http.Handle("/", fs)
+	var todos []Todo
+	for rows.Next() {
+		var t Todo
+		if err := rows.Scan(&t.ID, &t.Title, &t.Done); err != nil {
+			log.Println("getTodos scan:", err)
+			http.Error(w, "db error", http.StatusInternalServerError)
+			return
+		}
+		todos = append(todos, t)
+	}
 
-	log.Println("TODO app running at http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(todos)
+}
+
+func createTodoHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+
+	res, err := db.Exec(`INSERT INTO todos (title, done) VALUES (?, 0)`, title)
+	if err != nil {
+		log.Println("createTodo insert:", err)
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	id64, _ := res.LastInsertId()
+
+	todo := Todo{
+		ID:    int(id64),
+		Title: title,
+		Done:  false,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(todo)
+}
+
+func updateTodoHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/todos/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		Title string `json:"title"`
+		Done  bool   `json:"done"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+
+	res, err := db.Exec(
+		`UPDATE todos SET title = ?, done = ? WHERE id = ?`,
+		title, body.Done, id,
+	)
+	if err != nil {
+		log.Println("updateTodo update:", err)
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
+		http.Error(w, "todo not found", http.StatusNotFound)
+		return
+	}
+
+	todo := Todo{
+		ID:    id,
+		Title: title,
+		Done:  body.Done,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(todo)
+}
+
+func deleteTodoHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/todos/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	res, err := db.Exec(`DELETE FROM todos WHERE id = ?`, id)
+	if err != nil {
+		log.Println("deleteTodo delete:", err)
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
+		http.Error(w, "todo not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

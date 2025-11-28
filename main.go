@@ -13,10 +13,10 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-type Todo struct {
-	ID    int    `json:"id"`
-	Title string `json:"title"`
-	Done  bool   `json:"done"`
+type Note struct {
+	ID      int    `json:"id"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
 }
 
 var (
@@ -42,12 +42,24 @@ func main() {
 	}
 	log.Println("Connected to MariaDB")
 
+	// Create table if not exists
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS notes (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			title TEXT NOT NULL,
+			content TEXT
+		)
+	`)
+	if err != nil {
+		log.Fatal("create table:", err)
+	}
+
 	// parse frontend template (for /)
 	tmpl = template.Must(template.ParseFiles("static/index.html"))
 
 	// API routes
-	http.HandleFunc("/todos", todosHandler)   // GET, POST
-	http.HandleFunc("/todos/", todoItemHandler) // PUT, DELETE
+	http.HandleFunc("/notes", notesHandler)   // GET, POST
+	http.HandleFunc("/notes/", noteItemHandler) // PUT, DELETE
 
 	// Frontend
 	http.HandleFunc("/", frontHandler)
@@ -74,55 +86,56 @@ func frontHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func todosHandler(w http.ResponseWriter, r *http.Request) {
+func notesHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		getTodosHandler(w, r)
+		getNotesHandler(w, r)
 	case http.MethodPost:
-		createTodoHandler(w, r)
+		createNoteHandler(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func todoItemHandler(w http.ResponseWriter, r *http.Request) {
+func noteItemHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPut:
-		updateTodoHandler(w, r)
+		updateNoteHandler(w, r)
 	case http.MethodDelete:
-		deleteTodoHandler(w, r)
+		deleteNoteHandler(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func getTodosHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query(`SELECT id, title, done FROM todos ORDER BY id`)
+func getNotesHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query(`SELECT id, title, content FROM notes ORDER BY id DESC`)
 	if err != nil {
-		log.Println("getTodos query:", err)
+		log.Println("getNotes query:", err)
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
 
-	var todos []Todo
+	var notes []Note
 	for rows.Next() {
-		var t Todo
-		if err := rows.Scan(&t.ID, &t.Title, &t.Done); err != nil {
-			log.Println("getTodos scan:", err)
+		var n Note
+		if err := rows.Scan(&n.ID, &n.Title, &n.Content); err != nil {
+			log.Println("getNotes scan:", err)
 			http.Error(w, "db error", http.StatusInternalServerError)
 			return
 		}
-		todos = append(todos, t)
+		notes = append(notes, n)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(todos)
+	json.NewEncoder(w).Encode(notes)
 }
 
-func createTodoHandler(w http.ResponseWriter, r *http.Request) {
+func createNoteHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title string `json:"title"`
+		Title   string `json:"title"`
+		Content string `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -134,27 +147,27 @@ func createTodoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := db.Exec(`INSERT INTO todos (title, done) VALUES (?, 0)`, title)
+	res, err := db.Exec(`INSERT INTO notes (title, content) VALUES (?, ?)`, title, body.Content)
 	if err != nil {
-		log.Println("createTodo insert:", err)
+		log.Println("createNote insert:", err)
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
 	}
 	id64, _ := res.LastInsertId()
 
-	todo := Todo{
-		ID:    int(id64),
-		Title: title,
-		Done:  false,
+	note := Note{
+		ID:      int(id64),
+		Title:   title,
+		Content: body.Content,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(todo)
+	json.NewEncoder(w).Encode(note)
 }
 
-func updateTodoHandler(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/todos/")
+func updateNoteHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/notes/")
 	id, err := strconv.Atoi(idStr)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid id", http.StatusBadRequest)
@@ -162,8 +175,8 @@ func updateTodoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Title string `json:"title"`
-		Done  bool   `json:"done"`
+		Title   string `json:"title"`
+		Content string `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -176,47 +189,47 @@ func updateTodoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := db.Exec(
-		`UPDATE todos SET title = ?, done = ? WHERE id = ?`,
-		title, body.Done, id,
+		`UPDATE notes SET title = ?, content = ? WHERE id = ?`,
+		title, body.Content, id,
 	)
 	if err != nil {
-		log.Println("updateTodo update:", err)
+		log.Println("updateNote update:", err)
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
 	}
 	aff, _ := res.RowsAffected()
 	if aff == 0 {
-		http.Error(w, "todo not found", http.StatusNotFound)
+		http.Error(w, "note not found", http.StatusNotFound)
 		return
 	}
 
-	todo := Todo{
-		ID:    id,
-		Title: title,
-		Done:  body.Done,
+	note := Note{
+		ID:      id,
+		Title:   title,
+		Content: body.Content,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(todo)
+	json.NewEncoder(w).Encode(note)
 }
 
-func deleteTodoHandler(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/todos/")
+func deleteNoteHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/notes/")
 	id, err := strconv.Atoi(idStr)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 
-	res, err := db.Exec(`DELETE FROM todos WHERE id = ?`, id)
+	res, err := db.Exec(`DELETE FROM notes WHERE id = ?`, id)
 	if err != nil {
-		log.Println("deleteTodo delete:", err)
+		log.Println("deleteNote delete:", err)
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
 	}
 	aff, _ := res.RowsAffected()
 	if aff == 0 {
-		http.Error(w, "todo not found", http.StatusNotFound)
+		http.Error(w, "note not found", http.StatusNotFound)
 		return
 	}
 

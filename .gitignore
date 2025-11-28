@@ -1,0 +1,21 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go build output
+bin/
+build/
+dist/
+todo-app
+
+# OS/editor files
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/

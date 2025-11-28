@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Go TODO App</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 600px;
+            margin: 20px auto;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        form {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 6px;
+        }
+
+        button {
+            padding: 6px 10px;
+            cursor: pointer;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        li {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .done {
+            text-decoration: line-through;
+            color: #777;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Go TODO App</h1>
+
+    <form id="todo-form">
+        <input type="text" id="todo-title" placeholder="New todo..." required />
+        <button type="submit">Add</button>
+    </form>
+
+    <ul id="todo-list"></ul>
+
+    <script>
+        const todoList = document.getElementById('todo-list');
+        const form = document.getElementById('todo-form');
+        const titleInput = document.getElementById('todo-title');
+
+        async function loadTodos() {
+            const res = await fetch('/todos');
+            const data = await res.json();
+            renderTodos(data);
+        }
+
+        function renderTodos(todos) {
+            todoList.innerHTML = '';
+            todos.forEach(todo => {
+                const li = document.createElement('li');
+
+                const left = document.createElement('div');
+                left.className = 'left';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = todo.done;
+
+                const span = document.createElement('span');
+                span.textContent = todo.title;
+                if (todo.done) {
+                    span.classList.add('done');
+                }
+
+                checkbox.addEventListener('change', async () => {
+                    await updateTodo(todo.id, todo.title, checkbox.checked);
+                    loadTodos();
+                });
+
+                left.appendChild(checkbox);
+                left.appendChild(span);
+
+                const delBtn = document.createElement('button');
+                delBtn.textContent = 'Delete';
+                delBtn.addEventListener('click', async () => {
+                    await deleteTodo(todo.id);
+                    loadTodos();
+                });
+
+                li.appendChild(left);
+                li.appendChild(delBtn);
+                todoList.appendChild(li);
+            });
+        }
+
+        async function createTodo(title) {
+            await fetch('/todos', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title })
+            });
+        }
+
+        async function updateTodo(id, title, done) {
+            await fetch(`/todos/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title, done })
+            });
+        }
+
+        async function deleteTodo(id) {
+            await fetch(`/todos/${id}`, {
+                method: 'DELETE'
+            });
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const title = titleInput.value.trim();
+            if (!title) return;
+            await createTodo(title);
+            titleInput.value = '';
+            loadTodos();
+        });
+
+        // initial load
+        loadTodos();
+    </script>
+</body>
+
+</html>

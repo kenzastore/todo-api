@@ -102,6 +102,9 @@ func main() {
 	http.HandleFunc("/notes", authMiddleware(notesHandler))
 	http.HandleFunc("/notes/", authMiddleware(noteItemHandler))
 
+	// Static files
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+
 	// Frontend
 	http.HandleFunc("/", frontHandler)
 
